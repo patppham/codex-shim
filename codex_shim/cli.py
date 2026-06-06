@@ -334,19 +334,37 @@ def usage(log_path: Path) -> int:
         return 1
     summary = summarize_shim_log(log_path.read_text())
     req_total = sum(summary["request_models"].values())
+    resp_total = sum(summary["resp_models"].values())
     router_total = sum(summary["router_targets"].values())
+    grand_input = sum(summary["input_tokens_by_model"].values())
+    grand_output = sum(summary["output_tokens_by_model"].values())
+    grand_total = sum(summary["total_tokens_by_model"].values())
     print(f"Shim usage summary: {log_path}")
-    print(f"  requests: {req_total}")
+    print(f"  requests:  {req_total}  (responses logged: {resp_total})")
+    if grand_total:
+        print(f"  tokens:    {grand_input} in / {grand_output} out / {grand_total} total")
     if summary["request_models"]:
-        print("  request models:")
+        print("\n  request models:")
         for model, count in summary["request_models"].most_common():
-            print(f"    {model:<24} {count}")
+            inp = summary["input_tokens_by_model"].get(model, 0)
+            out = summary["output_tokens_by_model"].get(model, 0)
+            tot = summary["total_tokens_by_model"].get(model, 0)
+            token_str = f"  (tokens: {inp}/{out}/{tot})" if tot else ""
+            print(f"    {model:<24} {count}{token_str}")
     if summary["router_targets"]:
-        print(f"  router decisions: {router_total}")
+        print(f"\n  router decisions: {router_total}")
         for model, count in summary["router_targets"].most_common():
             print(f"    {model:<24} {count}")
+    if summary["session_requests"]:
+        print("\n  top sessions:")
+        for sess, count in summary["session_requests"].most_common(10):
+            print(f"    {sess:<32} {count} requests")
+    if summary["recent_resp_lines"]:
+        print("\n  recent response lines:")
+        for line in summary["recent_resp_lines"]:
+            print(f"    {line}")
     if summary["recent_router_lines"]:
-        print("  recent router picks:")
+        print("\n  recent router picks:")
         for line in summary["recent_router_lines"]:
             print(f"    {line}")
     return 0
@@ -957,7 +975,16 @@ def _pid_running(pid: int | None) -> bool:
         return False
 
 
-_REQUEST_MODEL_RE = re.compile(r"^\[req\]\s+/v1/(?:responses|chat/completions)\s+model='([^']+)'")
+_REQUEST_MODEL_RE = re.compile(
+    r"^\[req\]\s+[^\s]+\s+model='([^']+)'")
+_REQUEST_SESSION_RE = re.compile(
+    r"^\[req\].+?session='([^']*)'")
+_RESP_MODEL_RE = re.compile(
+    r"^\[resp\]\s+[^\s]+\s+model='([^']+)'")
+_RESP_TOKENS_RE = re.compile(
+    r"[resp].+?tokens=(\d+)/(\d+)/(\d+)")
+_RESP_SESSION_RE = re.compile(
+    r"^\[resp\].+?session='([^']*)'")
 _ROUTER_PICK_RE = re.compile(r"^\[router\].*->\s+([^\s(]+)")
 
 
@@ -965,19 +992,54 @@ def summarize_shim_log(text: str) -> dict[str, object]:
     request_models: Counter[str] = Counter()
     router_targets: Counter[str] = Counter()
     recent_router_lines: list[str] = []
+    resp_models: Counter[str] = Counter()
+    input_tokens_by_model: Counter[str] = Counter()
+    output_tokens_by_model: Counter[str] = Counter()
+    total_tokens_by_model: Counter[str] = Counter()
+    session_requests: Counter[str] = Counter()
+    recent_resp_lines: list[str] = []
     for line in text.splitlines():
+        # requests
         req = _REQUEST_MODEL_RE.search(line)
         if req:
             request_models[req.group(1)] += 1
+            sess = _REQUEST_SESSION_RE.search(line)
+            if sess and sess.group(1):
+                session_requests[sess.group(1)] += 1
+        # router picks
         router = _ROUTER_PICK_RE.search(line)
         if router:
             target = router.group(1)
             router_targets[target] += 1
             recent_router_lines.append(f"{target} | {line}")
+        # responses / tokens
+        resp = _RESP_MODEL_RE.search(line)
+        if resp:
+            model = resp.group(1)
+            resp_models[model] += 1
+            tok = _RESP_TOKENS_RE.search(line)
+            if tok:
+                inp = int(tok.group(1))
+                out = int(tok.group(2))
+                tot = int(tok.group(3))
+                input_tokens_by_model[model] += inp
+                output_tokens_by_model[model] += out
+                total_tokens_by_model[model] += tot
+            recent_resp_lines.append(line.strip())
+        # session from [resp] lines too
+        sess = _RESP_SESSION_RE.search(line)
+        if sess and sess.group(1) and sess.group(1) not in session_requests:
+            session_requests[sess.group(1)] += 0  # count from reqs is primary
     return {
         "request_models": request_models,
         "router_targets": router_targets,
         "recent_router_lines": recent_router_lines[-10:],
+        "resp_models": resp_models,
+        "input_tokens_by_model": input_tokens_by_model,
+        "output_tokens_by_model": output_tokens_by_model,
+        "total_tokens_by_model": total_tokens_by_model,
+        "session_requests": session_requests,
+        "recent_resp_lines": recent_resp_lines[-10:],
     }
 
 

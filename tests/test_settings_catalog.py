@@ -9,6 +9,7 @@ import pytest
 
 from codex_shim import cli
 from codex_shim.catalog import catalog_entry, write_catalog
+from codex_shim.server import _merge_streamed_tool_field
 from codex_shim.settings import ModelSettings, chatgpt_passthrough_available, FALLBACK_CHATGPT_PASSTHROUGH_SLUGS
 
 
@@ -164,6 +165,18 @@ def test_summarize_shim_log_counts_request_models_and_router_targets():
     assert summary["router_targets"]["glm-5-1"] == 1
     assert summary["router_targets"]["deepseek-v4-pro"] == 1
     assert summary["recent_router_lines"][-1].startswith("deepseek-v4-pro | ")
+
+
+def test_merge_streamed_tool_field_handles_repeated_full_name():
+    assert _merge_streamed_tool_field("exec_command", "exec_command") == "exec_command"
+
+
+def test_merge_streamed_tool_field_handles_suffix_fragments():
+    assert _merge_streamed_tool_field("exec_", "command") == "exec_command"
+
+
+def test_merge_streamed_tool_field_prefers_longer_complete_name():
+    assert _merge_streamed_tool_field("exec_com", "exec_command") == "exec_command"
 
 
 def test_chatgpt_passthrough_available_requires_access_token(tmp_path):

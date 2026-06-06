@@ -53,6 +53,10 @@ from .translate import (
 
 DEBUG_DIR = Path(__file__).resolve().parents[1] / ".codex-shim"
 CODEX_CONFIG_PATH = Path.home() / ".codex" / "config.toml"
+APPLY_PATCH_RUNTIME_NUDGE = (
+    "If you need to modify files, prefer the apply_patch tool instead of rewriting files through shell commands. "
+    "Using apply_patch helps Codex track edits and show its review UI."
+)
 
 
 class ShimServer:
@@ -198,6 +202,7 @@ class ShimServer:
     async def chat_completions(self, request: web.Request) -> web.StreamResponse:
         body = await request.json()
         body = await self._maybe_apply_auto_router(body)
+        body = _with_apply_patch_nudge(body)
         route = self._route(body)
         if route.is_openai_chat:
             forwarded = dict(body)
@@ -212,7 +217,8 @@ class ShimServer:
 
     async def responses(self, request: web.Request) -> web.StreamResponse:
         body = await request.json()
-        _log_incoming_request("/v1/responses", body)
+        session_id = request.headers.get("session_id", "")
+        _log_incoming_request("/v1/responses", body, session_id=session_id)
         body = await self._maybe_apply_auto_router(body)
         model = str(body.get("model") or "")
         if is_chatgpt_passthrough_slug(model):
@@ -233,6 +239,7 @@ class ShimServer:
             )
         if self._needs_image_gen(body) or self._needs_image_followup(body):
             return await self._chatgpt_passthrough(request, body, response_model_override=model)
+        body = _with_apply_patch_nudge(body)
         route = self._route(body)
         if route.is_openai_chat:
             forwarded = responses_to_chat(body, route.model)
@@ -244,7 +251,7 @@ class ShimServer:
 
     async def responses_compact(self, request: web.Request) -> web.StreamResponse:
         body = await request.json()
-        _log_incoming_request("/v1/responses/compact", body)
+        _log_incoming_request("/v1/responses/compact", body, session_id=request.headers.get("session_id", ""))
         body = await self._maybe_apply_auto_router(body)
         model = str(body.get("model") or "")
         if is_chatgpt_passthrough_slug(model):
@@ -476,6 +483,9 @@ class ShimServer:
             if not forwarded.get("stream"):
                 payload = await upstream.json(content_type=None)
                 _rewrite_response_model(payload, response_model_override)
+                _log_response(request.path, str(response_model_override or payload.get("model", "")),
+                              payload.get("usage"),
+                              session_id=request.headers.get("session_id", ""))
                 return web.json_response(payload)
             response = _sse_response()
             await response.prepare(request)
@@ -541,6 +551,9 @@ class ShimServer:
                 return await _error_response(upstream)
             payload = await upstream.json(content_type=None)
         _rewrite_response_model(payload, original_model or None)
+        _log_response(request.path, str(original_model or payload.get("model", "")),
+                      payload.get("usage"),
+                      session_id=request.headers.get("session_id", ""))
         return web.json_response(payload)
 
     async def _cursor_passthrough(
@@ -589,11 +602,13 @@ class ShimServer:
             normalized_usage = normalize_responses_usage(usage)
             if normalized_usage:
                 payload["usage"] = normalized_usage
+            _log_response("/v1/responses", slug, payload.get("usage"),
+                          session_id=request.headers.get("session_id", ""))
             return web.json_response(payload)
 
         response = _sse_response()
         await response.prepare(request)
-        state = ResponsesStreamState(slug)
+        state = ResponsesStreamState(slug, endpoint="/v1/responses", session_id=request.headers.get("session_id", ""))
         try:
             await state.start(response)
             async for event in iter_cursor_agent_events(prompt, upstream):
@@ -736,7 +751,10 @@ class ShimServer:
                 return await self._stream_openai_chat(request, upstream, route, as_responses)
             payload = await upstream.json(content_type=None)
         if as_responses:
-            return web.json_response(chat_completion_to_response(payload, route.slug))
+            resp = chat_completion_to_response(payload, route.slug)
+            _log_response(request.path, route.slug, resp.get("usage"),
+                          session_id=request.headers.get("session_id", ""))
+            return web.json_response(resp)
         return web.json_response(payload)
 
     async def _post_anthropic(
@@ -752,7 +770,10 @@ class ShimServer:
                 return await self._stream_anthropic(request, upstream, route, as_responses)
             payload = await upstream.json(content_type=None)
         if as_responses:
-            return web.json_response(anthropic_to_response(payload, route.slug))
+            resp = anthropic_to_response(payload, route.slug)
+            _log_response(request.path, route.slug, resp.get("usage"),
+                          session_id=request.headers.get("session_id", ""))
+            return web.json_response(resp)
         return web.json_response(anthropic_to_chat_response(payload, route.slug))
 
     async def _stream_openai_chat(
@@ -761,7 +782,8 @@ class ShimServer:
         response = _sse_response()
         await response.prepare(request)
         if as_responses:
-            state = ResponsesStreamState(route.slug)
+            state = ResponsesStreamState(
+                route.slug, endpoint=request.path, session_id=request.headers.get("session_id", ""))
         try:
             if as_responses:
                 await state.start(response)
@@ -796,7 +818,8 @@ class ShimServer:
         response = _sse_response()
         await response.prepare(request)
         if as_responses:
-            state = ResponsesStreamState(route.slug)
+            state = ResponsesStreamState(
+                route.slug, endpoint=request.path, session_id=request.headers.get("session_id", ""))
         try:
             if as_responses:
                 await state.start(response)
@@ -881,10 +904,12 @@ class ResponsesStreamState:
     proper .added / .delta / .done / .completed events plus a final
     `response.completed` with the full reconciled `output` array."""
 
-    def __init__(self, model: str):
+    def __init__(self, model: str, *, endpoint: str = "", session_id: str = ""):
         self.response_id = f"resp_{int(time.time() * 1000)}"
         self.message_item_id = f"msg_{int(time.time() * 1000)}"
         self.model = model
+        self._endpoint = endpoint
+        self._session_id = session_id
         self.message_index: int | None = None  # output_index for the assistant message
         self.message_text = ""
         self.message_opened = False
@@ -915,6 +940,7 @@ class ResponsesStreamState:
                 await self._close_tool(response, state)
         await _write_sse(response, {"type": "response.completed", "response": self._response("completed", final=True)})
         await response.write(b"data: [DONE]\n\n")
+        _log_response(self._endpoint, self.model, self.usage, session_id=self._session_id)
 
     # ------------------------------------------------------------------
     # Chat-completions (OpenAI-style) deltas
@@ -962,7 +988,7 @@ class ResponsesStreamState:
             state = await self._open_tool(response, key=index, call_id=call_id, name=fn.get("name") or "")
         else:
             if fn.get("name"):
-                state["name"] += fn["name"]
+                state["name"] = _merge_streamed_tool_field(state["name"], str(fn["name"]))
         arg_delta = fn.get("arguments") or ""
         if arg_delta:
             state["arguments"] += arg_delta
@@ -1472,7 +1498,22 @@ class ClientDisconnected(Exception):
     """Raised when the downstream Codex client closes the SSE connection."""
 
 
-def _log_incoming_request(endpoint: str, body: dict[str, Any]) -> None:
+def _log_response(endpoint: str, model: str, usage: dict[str, Any] | None, *, session_id: str = "") -> None:
+    try:
+        inp = usage.get("input_tokens", "?") if usage else "?"
+        out = usage.get("output_tokens", "?") if usage else "?"
+        tot = usage.get("total_tokens", "?") if usage else "?"
+        session_part = f" session={session_id!r}" if session_id else ""
+        print(
+            f"[resp] {endpoint} model={model!r} "
+            f"tokens={inp}/{out}/{tot}{session_part}",
+            flush=True,
+        )
+    except Exception as exc:
+        print(f"[resp] failed to log: {exc}", flush=True)
+
+
+def _log_incoming_request(endpoint: str, body: dict[str, Any], *, session_id: str = "") -> None:
     try:
         tools = body.get("tools") or []
         names = []
@@ -1496,7 +1537,8 @@ def _log_incoming_request(endpoint: str, body: dict[str, Any]) -> None:
         print(
             f"[req] {endpoint} model={body.get('model')!r} stream={body.get('stream')!r} "
             f"tools={len(tools)} ({names[:8]}) "
-            f"input={len(input_items)} ({input_summary})",
+            f"input={len(input_items)} ({input_summary})"
+            + (f" session={session_id!r}" if session_id else ""),
             flush=True,
         )
     except Exception as exc:
@@ -1543,6 +1585,55 @@ def _default_compact_instructions() -> str:
         "Preserve the active task, user requirements, important file paths, commands already run, "
         "tool results, decisions, blockers, and the latest state. Omit filler and repeated text."
     )
+
+
+def _with_apply_patch_nudge(body: dict[str, Any]) -> dict[str, Any]:
+    if not _has_apply_patch_tool(body):
+        return body
+    existing = str(body.get("instructions") or "").strip()
+    if APPLY_PATCH_RUNTIME_NUDGE in existing:
+        return body
+    updated = dict(body)
+    updated["instructions"] = (
+        f"{existing}\n\n{APPLY_PATCH_RUNTIME_NUDGE}".strip()
+        if existing
+        else APPLY_PATCH_RUNTIME_NUDGE
+    )
+    return updated
+
+
+def _merge_streamed_tool_field(current: str, incoming: str) -> str:
+    """Merge streamed tool field fragments while tolerating full-name repeats."""
+    if not incoming:
+        return current
+    if not current:
+        return incoming
+    if incoming == current or incoming in current:
+        return current
+    if current in incoming:
+        return incoming
+    max_overlap = min(len(current), len(incoming))
+    for overlap in range(max_overlap, 0, -1):
+        if current.endswith(incoming[:overlap]):
+            return current + incoming[overlap:]
+    return current + incoming
+
+
+def _has_apply_patch_tool(body: dict[str, Any]) -> bool:
+    tools = body.get("tools") or []
+    if not isinstance(tools, list):
+        return False
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        if str(tool.get("type") or "").strip().lower() == "apply_patch":
+            return True
+        if str(tool.get("name") or "").strip().lower() == "apply_patch":
+            return True
+        function = tool.get("function")
+        if isinstance(function, dict) and str(function.get("name") or "").strip().lower() == "apply_patch":
+            return True
+    return False
 
 
 async def _as_compact_response(response: web.StreamResponse, model: str) -> web.Response:

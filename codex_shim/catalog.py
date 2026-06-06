@@ -18,6 +18,11 @@ from .cursor_passthrough import cursor_catalog_entry, cursor_passthrough_availab
 
 
 PLAN_TIERS = ["free", "plus", "pro", "team", "business", "enterprise"]
+LOCAL_EDIT_INSTRUCTIONS = (
+    "You are Codex running through a local BYOK shim. "
+    "When changing files, prefer the apply_patch tool so Codex can track edits and show review UI. "
+    "Use shell tools for inspection, tests, and other command-line tasks, not as the default way to rewrite files."
+)
 
 
 def catalog_entry(model: ShimModel) -> dict:
@@ -64,11 +69,12 @@ def catalog_entry(model: ShimModel) -> dict:
         "priority": max(1, 1000 - model.index),
         "prefer_websockets": False,
         "available_in_plans": PLAN_TIERS,
-        "base_instructions": "You are a coding agent running in Codex through a local BYOK shim.",
+        "base_instructions": LOCAL_EDIT_INSTRUCTIONS,
         "model_messages": {
             "instructions_template": (
                 "You are Codex running on {model_name} through a local all-model shim. "
-                "Be a helpful, direct coding collaborator."
+                "Be a helpful, direct coding collaborator. "
+                "When editing files, prefer apply_patch so Codex can capture edits cleanly."
             ),
             "instructions_variables": {"model_name": model.display_name},
         },

@@ -179,6 +179,11 @@ def router_models_entry(config: RouterConfig, created: int) -> dict[str, Any]:
 
 
 def router_catalog_entry(config: RouterConfig) -> dict[str, Any]:
+    instructions = (
+        "You are Codex, a coding agent. The active model is chosen automatically per task. "
+        "When changing files, prefer the apply_patch tool so Codex can track edits and show review UI. "
+        "Use shell tools mainly for inspection, tests, and commands rather than as the default file-edit path."
+    )
     return {
         "slug": config.slug,
         "display_name": config.display_name,
@@ -215,9 +220,9 @@ def router_catalog_entry(config: RouterConfig) -> dict[str, Any]:
         "priority": 12000,
         "prefer_websockets": False,
         "available_in_plans": ["free", "plus", "pro", "team", "business", "enterprise"],
-        "base_instructions": "You are Codex, a coding agent. The active model is chosen automatically per task.",
+        "base_instructions": instructions,
         "model_messages": {
-            "instructions_template": "You are Codex, a coding agent. The active model is chosen automatically per task.",
+            "instructions_template": instructions,
             "instructions_variables": {"model_name": config.display_name},
         },
     }

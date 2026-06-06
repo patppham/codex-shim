@@ -833,6 +833,7 @@ codex-shim stop              stop daemon
 codex-shim disable           remove managed config block and stop daemon
 codex-shim restart           stop, regenerate, and start daemon
 codex-shim list              list generated slugs and upstream routes
+codex-shim usage             summarize shim log traffic by model
 codex-shim model list        list slugs currently usable in the picker
 codex-shim model use <slug>  set the Desktop default model in managed config
 codex-shim codex -- <args>   exec `codex` CLI through inline shim overrides

@@ -94,6 +94,13 @@ def test_catalog_preserves_context_and_visibility():
     assert "free" in entry["available_in_plans"]
 
 
+def test_catalog_maps_hidden_visibility_to_hide():
+    model = ModelSettingsFixture.one()
+    model.raw["visibility"] = "hidden"
+    entry = catalog_entry(model)
+    assert entry["visibility"] == "hide"
+
+
 def test_default_missing_settings_allows_chatgpt_only(monkeypatch, tmp_path):
     missing = tmp_path / "missing-default.json"
     monkeypatch.setattr("codex_shim.settings.DEFAULT_SETTINGS", missing)
@@ -139,6 +146,24 @@ def test_cli_load_models_invalid_json_has_actionable_error(tmp_path):
     with pytest.raises(SystemExit) as exc:
         cli._load_models(settings)
     assert "Settings file is not valid JSON" in str(exc.value)
+
+
+def test_summarize_shim_log_counts_request_models_and_router_targets():
+    summary = cli.summarize_shim_log(
+        "\n".join(
+            [
+                "[req] /v1/responses model='codex-auto' stream=True tools=0 ([]) input=1 (['message'])",
+                "[router] -> glm-5-1 (score=0.91; threshold=0.76) scores={'glm-5-1': 0.91}",
+                "[req] /v1/responses model='glm-5-1' stream=True tools=0 ([]) input=1 (['message'])",
+                "[router] codex-auto -> deepseek-v4-pro",
+            ]
+        )
+    )
+    assert summary["request_models"]["codex-auto"] == 1
+    assert summary["request_models"]["glm-5-1"] == 1
+    assert summary["router_targets"]["glm-5-1"] == 1
+    assert summary["router_targets"]["deepseek-v4-pro"] == 1
+    assert summary["recent_router_lines"][-1].startswith("deepseek-v4-pro | ")
 
 
 def test_chatgpt_passthrough_available_requires_access_token(tmp_path):

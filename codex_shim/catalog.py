@@ -25,6 +25,9 @@ def catalog_entry(model: ShimModel) -> dict:
     compact = max(8_000, int(context * 0.8))
     truncation = min(64_000, max(8_000, int(context * 0.32)))
     reasoning = _reasoning_effort(model)
+    visibility = str(model.raw.get("visibility") or "list").strip() or "list"
+    if visibility == "hidden":
+        visibility = "hide"
     return {
         "slug": model.slug,
         "display_name": model.display_name,
@@ -53,7 +56,7 @@ def catalog_entry(model: ShimModel) -> dict:
         "input_modalities": ["text"] if model.no_image_support else ["text", "image"],
         "supports_image_detail_original": not model.no_image_support,
         "shell_type": "shell_command",
-        "visibility": "list",
+        "visibility": visibility,
         "minimal_client_version": "0.0.1",
         "supported_in_api": True,
         "availability_nux": None,
@@ -178,4 +181,3 @@ def _reasoning_effort(model: ShimModel) -> str:
 
 def _toml_escape(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
-

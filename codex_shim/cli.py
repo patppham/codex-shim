@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import os
 from pathlib import Path
 import ctypes
@@ -12,6 +13,7 @@ import hashlib
 import json
 import plistlib
 import struct
+import re
 from urllib.request import urlopen
 
 from . import router as router_module
@@ -83,6 +85,8 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("disable")
     sub.add_parser("restart")
     sub.add_parser("status")
+    usage_parser = sub.add_parser("usage", help="Summarize shim log traffic by model.")
+    usage_parser.add_argument("--log", type=Path, default=LOG_PATH)
     sub.add_parser("patch-app", help="Patch Codex Desktop picker/sidebar handling for custom shim models.")
     sub.add_parser("restore-app", help="Restore Codex Desktop app.asar from the pre-patch backup.")
 
@@ -121,6 +125,8 @@ def main(argv: list[str] | None = None) -> int:
         return start(args.settings, args.port)
     if args.command == "status":
         return status(args.port)
+    if args.command == "usage":
+        return usage(args.log)
     if args.command == "patch-app":
         return patch_codex_app()
     if args.command == "restore-app":
@@ -320,6 +326,30 @@ def status(port: int) -> int:
         return 1
     print("Shim is stopped.")
     return 1
+
+
+def usage(log_path: Path) -> int:
+    if not log_path.exists():
+        print(f"Log file not found: {log_path}", file=sys.stderr)
+        return 1
+    summary = summarize_shim_log(log_path.read_text())
+    req_total = sum(summary["request_models"].values())
+    router_total = sum(summary["router_targets"].values())
+    print(f"Shim usage summary: {log_path}")
+    print(f"  requests: {req_total}")
+    if summary["request_models"]:
+        print("  request models:")
+        for model, count in summary["request_models"].most_common():
+            print(f"    {model:<24} {count}")
+    if summary["router_targets"]:
+        print(f"  router decisions: {router_total}")
+        for model, count in summary["router_targets"].most_common():
+            print(f"    {model:<24} {count}")
+    if summary["recent_router_lines"]:
+        print("  recent router picks:")
+        for line in summary["recent_router_lines"]:
+            print(f"    {line}")
+    return 0
 
 
 def ensure_started(settings_path: Path, port: int) -> None:
@@ -925,6 +955,30 @@ def _pid_running(pid: int | None) -> bool:
         return True
     except OSError:
         return False
+
+
+_REQUEST_MODEL_RE = re.compile(r"^\[req\]\s+/v1/(?:responses|chat/completions)\s+model='([^']+)'")
+_ROUTER_PICK_RE = re.compile(r"^\[router\].*->\s+([^\s(]+)")
+
+
+def summarize_shim_log(text: str) -> dict[str, object]:
+    request_models: Counter[str] = Counter()
+    router_targets: Counter[str] = Counter()
+    recent_router_lines: list[str] = []
+    for line in text.splitlines():
+        req = _REQUEST_MODEL_RE.search(line)
+        if req:
+            request_models[req.group(1)] += 1
+        router = _ROUTER_PICK_RE.search(line)
+        if router:
+            target = router.group(1)
+            router_targets[target] += 1
+            recent_router_lines.append(f"{target} | {line}")
+    return {
+        "request_models": request_models,
+        "router_targets": router_targets,
+        "recent_router_lines": recent_router_lines[-10:],
+    }
 
 
 def _entrypoint() -> int:

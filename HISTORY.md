@@ -18,6 +18,9 @@
 - Fixed streamed local-model tool-call name merging so repeated name deltas do
   not produce malformed calls like `exec_commandexec_command`, which was
   causing `invalid tool call arguments` errors in Codex Desktop.
+- Hardened local tool-call forwarding by disabling parallel tool calls for the
+  local catalog and sanitizing malformed replayed tool-call arguments so fresh
+  sessions do not get poisoned by concatenated JSON blobs.
 - Confirmed current desktop gaps are not all prompt-related: appshots are gated
   by a host `requirements.allowAppshots` check, while microphone/audio appears
   to be controlled through separate app capability paths rather than standard

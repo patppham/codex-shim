@@ -182,7 +182,8 @@ def router_catalog_entry(config: RouterConfig) -> dict[str, Any]:
     instructions = (
         "You are Codex, a coding agent. The active model is chosen automatically per task. "
         "When changing files, prefer the apply_patch tool so Codex can track edits and show review UI. "
-        "Use shell tools mainly for inspection, tests, and commands rather than as the default file-edit path."
+        "Use shell tools mainly for inspection, tests, and commands rather than as the default file-edit path. "
+        "Make at most one tool call at a time, and never concatenate multiple JSON argument objects into a single tool call."
     )
     return {
         "slug": config.slug,
@@ -207,7 +208,7 @@ def router_catalog_entry(config: RouterConfig) -> dict[str, Any]:
         "apply_patch_tool_type": "freeform",
         "web_search_tool_type": "text_and_image",
         "supports_search_tool": False,
-        "supports_parallel_tool_calls": True,
+        "supports_parallel_tool_calls": False,
         "experimental_supported_tools": [],
         "input_modalities": ["text", "image"],
         "supports_image_detail_original": True,

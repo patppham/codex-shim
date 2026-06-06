@@ -55,7 +55,6 @@ def responses_to_chat(body: dict[str, Any], upstream_model: str) -> dict[str, An
     _copy_if_present(body, chat, "top_p")
     _copy_if_present(body, chat, "max_output_tokens", "max_tokens")
     _copy_if_present(body, chat, "max_tokens")
-    _copy_if_present(body, chat, "parallel_tool_calls")
     _copy_if_present(body, chat, "reasoning_effort")
 
     tools = _responses_tools_to_chat_tools(body.get("tools"))
@@ -389,8 +388,8 @@ def _responses_input_to_messages(value: Any) -> list[dict[str, Any]]:
                     "id": call_id,
                     "type": "function",
                     "function": {
-                        "name": item.get("name") or "",
-                        "arguments": item.get("arguments") or "",
+                        "name": _sanitize_tool_name(str(item.get("name") or "")),
+                        "arguments": _sanitize_tool_arguments(item.get("arguments")),
                     },
                 }
             )
@@ -620,7 +619,25 @@ def _responses_tool_function_name(tool: dict[str, Any]) -> str:
 
 def _sanitize_tool_name(name: str) -> str:
     clean = re.sub(r"[^a-zA-Z0-9_-]+", "_", name.strip())[:64]
-    return clean.strip("_") or "tool"
+    clean = clean.strip("_")
+    if clean:
+        half = len(clean) // 2
+        if len(clean) % 2 == 0 and clean[:half] == clean[half:]:
+            clean = clean[:half]
+    return clean or "tool"
+
+
+def _sanitize_tool_arguments(arguments: Any) -> str:
+    if not isinstance(arguments, str):
+        return "{}"
+    cleaned = _sanitize_string(arguments)
+    if not cleaned:
+        return "{}"
+    try:
+        json.loads(cleaned)
+        return cleaned
+    except json.JSONDecodeError:
+        return json.dumps({"_raw": cleaned}, ensure_ascii=False)
 
 
 def _native_tool_description(tool: dict[str, Any]) -> str:
@@ -802,9 +819,10 @@ def _sanitize_chat_messages(messages: list[dict[str, Any]]) -> list[dict[str, An
                 function = copied_call.get("function")
                 if isinstance(function, dict):
                     function = dict(function)
+                    if isinstance(function.get("name"), str):
+                        function["name"] = _sanitize_tool_name(function["name"])
                     arguments = function.get("arguments")
-                    if isinstance(arguments, str):
-                        function["arguments"] = _sanitize_string(arguments)
+                    function["arguments"] = _sanitize_tool_arguments(arguments)
                     copied_call["function"] = function
                 copied_calls.append(copied_call)
             current["tool_calls"] = copied_calls

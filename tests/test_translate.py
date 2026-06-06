@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from codex_shim.translate import anthropic_to_response, chat_completion_to_response, responses_to_anthropic, responses_to_chat
 
 
@@ -32,6 +34,7 @@ def test_responses_to_chat_preserves_reasoning_and_effort_for_deepseek():
         {"role": "system", "content": "rules"},
         {"role": "user", "content": "next"},
     ]
+    assert "parallel_tool_calls" not in out
 
 
 def test_responses_to_chat_sanitizes_and_merges_strict_provider_messages():
@@ -59,6 +62,45 @@ def test_responses_to_chat_sanitizes_and_merges_strict_provider_messages():
             ],
         },
     ]
+
+
+def test_responses_to_chat_does_not_forward_parallel_tool_calls():
+    body = {
+        "model": "slug",
+        "parallel_tool_calls": True,
+        "input": "hi",
+    }
+
+    out = responses_to_chat(body, "deepseek-v4-pro")
+
+    assert "parallel_tool_calls" not in out
+
+
+def test_responses_to_chat_sanitizes_concatenated_tool_call_arguments():
+    body = {
+        "model": "slug",
+        "input": [
+            {
+                "type": "function_call",
+                "call_id": "call_1",
+                "name": "exec_command",
+                "arguments": "{\"cmd\":\"git status\"}{\"cmd\":\"ls\"}",
+            },
+            {
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": "failed to parse function arguments: trailing characters",
+            },
+        ],
+    }
+
+    out = responses_to_chat(body, "deepseek-v4-flash")
+
+    call = out["messages"][0]["tool_calls"][0]
+    assert call["id"] == "call_1"
+    assert call["type"] == "function"
+    assert call["function"]["name"] == "exec_command"
+    assert json.loads(call["function"]["arguments"]) == {"_raw": "{\"cmd\":\"git status\"}{\"cmd\":\"ls\"}"}
 
 
 def test_responses_function_tools_convert_to_chat_shape():

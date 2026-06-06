@@ -21,7 +21,8 @@ PLAN_TIERS = ["free", "plus", "pro", "team", "business", "enterprise"]
 LOCAL_EDIT_INSTRUCTIONS = (
     "You are Codex running through a local BYOK shim. "
     "When changing files, prefer the apply_patch tool so Codex can track edits and show review UI. "
-    "Use shell tools for inspection, tests, and other command-line tasks, not as the default way to rewrite files."
+    "Use shell tools for inspection, tests, and other command-line tasks, not as the default way to rewrite files. "
+    "Make at most one tool call at a time, and never concatenate multiple JSON argument objects into a single tool call."
 )
 
 
@@ -56,7 +57,7 @@ def catalog_entry(model: ShimModel) -> dict:
         "apply_patch_tool_type": "freeform",
         "web_search_tool_type": "text_and_image",
         "supports_search_tool": False,
-        "supports_parallel_tool_calls": True,
+        "supports_parallel_tool_calls": False,
         "experimental_supported_tools": [],
         "input_modalities": ["text"] if model.no_image_support else ["text", "image"],
         "supports_image_detail_original": not model.no_image_support,
@@ -74,7 +75,8 @@ def catalog_entry(model: ShimModel) -> dict:
             "instructions_template": (
                 "You are Codex running on {model_name} through a local all-model shim. "
                 "Be a helpful, direct coding collaborator. "
-                "When editing files, prefer apply_patch so Codex can capture edits cleanly."
+                "When editing files, prefer apply_patch so Codex can capture edits cleanly. "
+                "Make one tool call at a time."
             ),
             "instructions_variables": {"model_name": model.display_name},
         },
